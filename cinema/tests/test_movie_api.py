@@ -8,6 +8,7 @@ from django.urls import reverse
 
 from rest_framework.test import APIClient
 from rest_framework import status
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from cinema.models import Movie, MovieSession, CinemaHall, Genre, Actor
 
@@ -72,14 +73,18 @@ class MovieImageUploadTests(TestCase):
         self.user = get_user_model().objects.create_superuser(
             "admin@myproject.com", "password"
         )
-        self.client.force_authenticate(self.user)
+
+        refresh = RefreshToken.for_user(self.user)
+        access_token = str(refresh.access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
+
         self.movie = sample_movie()
         self.genre = sample_genre()
         self.actor = sample_actor()
         self.movie_session = sample_movie_session(movie=self.movie)
 
     def tearDown(self):
-        self.movie.image.delete()
+        if self.movie.image: self.movie.image.delete()
 
     def test_upload_image_to_movie(self):
         """Test uploading an image to movie"""
@@ -169,11 +174,14 @@ class MovieApiTests(TestCase):
             "user@test.com", "password"
         )
 
+        refresh = RefreshToken.for_user(self.user)
+        self.access_token = str(refresh.access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.access_token}')
+
     def test_list_movies(self):
         sample_movie(title="Titanic")
         sample_movie(title="Avatar")
 
-        self.client.force_authenticate(self.user)
         res = self.client.get(MOVIE_URL)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
@@ -183,7 +191,6 @@ class MovieApiTests(TestCase):
         movie1 = sample_movie(title="Titanic")
         sample_movie(title="Avatar")
 
-        self.client.force_authenticate(self.user)
         res = self.client.get(MOVIE_URL, {"title": "Titanic"})
 
         self.assertEqual(len(res.data), 1)
@@ -197,7 +204,6 @@ class MovieApiTests(TestCase):
         movie2 = sample_movie(title="Film2")
         movie2.genres.add(genre2)
 
-        self.client.force_authenticate(self.user)
         res = self.client.get(MOVIE_URL, {"genres": f"{genre1.id}"})
 
         self.assertEqual(len(res.data), 1)
@@ -207,7 +213,6 @@ class MovieApiTests(TestCase):
         movie = sample_movie()
         url = detail_url(movie.id)
 
-        self.client.force_authenticate(self.user)
         res = self.client.get(url)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
@@ -216,11 +221,13 @@ class MovieApiTests(TestCase):
     def test_create_movie_admin_only(self):
         payload = {"title": "New Movie", "description": "Test", "duration": 120}
 
-        self.client.force_authenticate(self.user)
         res = self.client.post(MOVIE_URL, payload)
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
-        self.client.force_authenticate(self.admin)
+        refresh = RefreshToken.for_user(self.admin)
+        access_token = str(refresh.access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
+
         res = self.client.post(MOVIE_URL, payload)
         self.assertIn(res.status_code, [status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST])
 
@@ -232,11 +239,13 @@ class MovieApiTests(TestCase):
         payload = {"title": "Updated"}
         url = detail_url(movie.id)
 
-        self.client.force_authenticate(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.access_token}')
         res = self.client.patch(url, payload)
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
-        self.client.force_authenticate(self.admin)
+        refresh = RefreshToken.for_user(self.admin)
+        access_token = str(refresh.access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
         res = self.client.patch(url, payload)
         self.assertEqual(res.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
 
@@ -244,10 +253,26 @@ class MovieApiTests(TestCase):
         movie = sample_movie()
         url = detail_url(movie.id)
 
-        self.client.force_authenticate(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.access_token}')
         res = self.client.delete(url)
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
-        self.client.force_authenticate(self.admin)
+        refresh = RefreshToken.for_user(self.admin)
+        access_token = str(refresh.access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
         res = self.client.delete(url)
         self.assertEqual(res.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_filter_movies_by_actors(self):
+        actor1 = Actor.objects.create(first_name="Actor", last_name="One")
+        actor2 = Actor.objects.create(first_name="Actor", last_name="Two")
+        movie1 = Movie.objects.create(title="Movie1", description="Desc1", duration=120)
+        movie2 = Movie.objects.create(title="Movie2", description="Desc2", duration=100)
+        movie1.actors.add(actor1)
+        movie2.actors.add(actor2)
+
+        res = self.client.get(MOVIE_URL, {"actors": f"{actor1.id}"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(res.data), 1)
+        self.assertEqual(res.data[0]["title"], movie1.title)
+
