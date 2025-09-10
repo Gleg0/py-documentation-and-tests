@@ -1,7 +1,5 @@
-from django.core.cache import cache
 from django.test import TestCase, override_settings, TransactionTestCase
 from rest_framework.reverse import reverse
-from rest_framework.settings import reload_api_settings, api_settings
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import get_user_model
@@ -35,18 +33,31 @@ class JWTAuthenticationTest(TestCase):
         self.assertEqual(res.status_code, 401)
 
 
+@override_settings(
+    REST_FRAMEWORK={
+        "DEFAULT_THROTTLE_CLASSES": [
+            "rest_framework.throttling.UserRateThrottle",
+        ],
+        "DEFAULT_THROTTLE_RATES": {
+            "user": "3/minute",
+        },
+        "DEFAULT_AUTHENTICATION_CLASSES": [
+            "rest_framework_simplejwt.authentication.JWTAuthentication",
+        ]
+    }
+)
 class ThrottlingTest(TransactionTestCase):
     def setUp(self):
-        self.user = get_user_model().objects.create_user(
-            email="user@test.com",
-            password="password"
-        )
         self.client = APIClient()
+        self.user = get_user_model().objects.create_user(
+            email="usertrotling@test.com",
+            password="password123321"
+        )
         refresh = RefreshToken.for_user(self.user)
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {str(refresh.access_token)}')
 
     def test_user_throttling(self):
-        for i in range(29):
+        for i in range(3):
             res = self.client.get(MOVIE_URL)
             self.assertNotEqual(res.status_code, 429)
 
